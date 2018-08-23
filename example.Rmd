@@ -1,0 +1,44 @@
+---
+title: "Bayesian cost-effectiveness analysis with an individual-level semi-Markov model"
+output: html_notebook
+---
+
+# Set up
+We will need some packages:
+```{r}
+library("BCEA")
+library("hesim")
+library("flexsurv")
+```
+
+# Parameter estimation
+```{r}
+fits <- vector(length = 3, mode = "list")
+dat <- data.frame(bosms3)
+for (i in 1:length(fits)){
+  fits[[i]] <- flexsurvreg(Surv(years, status) ~ 1, data = dat[dat$trans == i, ],
+                           dist = "weibull")
+}
+fits <- flexsurvreg_list(fits)
+```
+
+# Simulation
+```{r}
+df_strategies <- data.frame(strategy_id = c(1, 2, 3))
+df_patients <- data.frame(patient_id = seq(1, 1000))
+hesim_dat <- hesim_data(strategies = df_strategies,
+                        patients = df_patients)
+fits_data <- expand_hesim_data(hesim_dat)
+tmat <- rbind(c(NA, 1, 2),
+              c(NA, NA, 3),
+              c(NA, NA, NA))
+transmod <- create_CtstmTrans(fits, data = fits_data, trans_mat = tmat,
+                              n = 1000)
+ictstm <- IndivCtstm$new(trans_model = transmod)
+
+ptm <- proc.time()
+disprog <- ictstm$sim_disease()$disease_prog_
+proc.time() - ptm
+```
+
+# Analysis
