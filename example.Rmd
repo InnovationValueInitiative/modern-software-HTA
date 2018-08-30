@@ -1,44 +1,78 @@
 ---
 title: "Bayesian cost-effectiveness analysis with an individual-level semi-Markov model"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
-# Set up
-We will need some packages:
-```{r}
+# Model structure and setup
+We will consider an illness-death cost-effectiveness model in which patients can transition between three health states: healthy, sick, and death. The cost-effectiveness model will be analyzed using the `R` programming language. The capabilities of `R` are further extended with user-created packages, which bundle together code, data, documentation, and tests. In this analysis, we will use four main packages. The `diagram` package will be used to visualize the illness-death model. `flexsurv` is used to fit the statistical models needed to parameterize the cost-effectiveness model and `hesim` is used to simulate the cost-effectiveness model conditional on the estimated parameters. Finally, `BCEA` is used to analyze the output (i.e., quality-adjusted life-years (QALYs) and costs) produced by `hesim`.
+
+We begin by loading the required packages.
+
+```{r, message = FALSE, warning = FALSE}
+library("diagram")
 library("BCEA")
 library("hesim")
 library("flexsurv")
 ```
 
-# Parameter estimation
-```{r}
-fits <- vector(length = 3, mode = "list")
-dat <- data.frame(bosms3)
-for (i in 1:length(fits)){
-  fits[[i]] <- flexsurvreg(Surv(years, status) ~ 1, data = dat[dat$trans == i, ],
-                           dist = "weibull")
-}
-fits <- flexsurvreg_list(fits)
-```
+We can visualize the illness-death model by creating a transition matrix that describes the 3 possible health states and 4 possible transitions. The matrix is a square-matrix where the (i,j) element is a positive integer if a transition from i to j is possible and `NA` otherwise. 
 
-# Simulation
 ```{r}
-df_strategies <- data.frame(strategy_id = c(1, 2, 3))
-df_patients <- data.frame(patient_id = seq(1, 1000))
-hesim_dat <- hesim_data(strategies = df_strategies,
-                        patients = df_patients)
-fits_data <- expand_hesim_data(hesim_dat)
 tmat <- rbind(c(NA, 1, 2),
-              c(NA, NA, 3),
+              c(3, NA, 4),
               c(NA, NA, NA))
-transmod <- create_CtstmTrans(fits, data = fits_data, trans_mat = tmat,
-                              n = 1000)
-ictstm <- IndivCtstm$new(trans_model = transmod)
-
-ptm <- proc.time()
-disprog <- ictstm$sim_disease()$disease_prog_
-proc.time() - ptm
+print(tmat)
+diagram::plotmat(tmat, name = c("Healthy", "Sick", "Death"))
 ```
 
-# Analysis
+To use the illness-death model to simulate QALYs and costs we assign "state values"" to each of the three health states. The full cost-effectiveness analysis is then conducted in three steps:
+
+* **Parameter estimation**: Multi-state statistical models are used to characterize transitions between health states. In addition, quality-of-life and cost values are estimated for each health state. 
+* **Model simulation**: Once the model is parameterized, time spent in each health state is simulated, which is, in turn, used to compute QALYs and costs. 
+* **(Bayesian) cost-effectiveness analysis**: Given the simulated output of the model, we summarize the probabilistic sensitivity analysis (PSA) and compute standard quantities of interest such as cost per QALY.
+
+# Parameter estimation 
+
+# Model simulation
+
+# Bayesian cost-effectiveness analysis
+
+
+<!-- # Parameter estimation -->
+<!-- ```{r} -->
+
+<!-- plotmat(tmat, name = c("Healthy", "Sick", "Death")) -->
+
+
+
+<!-- fits <- vector(length = 3, mode = "list") -->
+<!-- dat <- data.frame(bosms3) -->
+<!-- for (i in 1:length(fits)){ -->
+<!--   fits[[i]] <- flexsurvreg(Surv(years, status) ~ 1, data = dat[dat$trans == i, ], -->
+<!--                            dist = "weibull") -->
+<!-- } -->
+<!-- fits <- flexsurvreg_list(fits) -->
+<!-- ``` -->
+
+<!-- # Simulation -->
+<!-- ```{r} -->
+<!-- df_strategies <- data.frame(strategy_id = c(1, 2, 3)) -->
+<!-- df_patients <- data.frame(patient_id = seq(1, 1000)) -->
+<!-- hesim_dat <- hesim_data(strategies = df_strategies, -->
+<!--                         patients = df_patients) -->
+<!-- fits_data <- expand_hesim_data(hesim_dat) -->
+<!-- tmat <- rbind(c(NA, 1, 2), -->
+<!--               c(NA, NA, 3), -->
+<!--               c(NA, NA, NA)) -->
+<!-- transmod <- create_CtstmTrans(fits, data = fits_data, trans_mat = tmat, -->
+<!--                               n = 1000) -->
+<!-- ictstm <- IndivCtstm$new(trans_model = transmod) -->
+
+<!-- ptm <- proc.time() -->
+<!-- disprog <- ictstm$sim_disease()$disease_prog_ -->
+<!-- proc.time() - ptm -->
+<!-- ``` -->
+
+<!-- # Analysis -->
