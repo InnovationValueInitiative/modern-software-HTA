@@ -3,23 +3,28 @@ title: "Bayesian cost-effectiveness analysis with an individual-level semi-Marko
 output:
   html_document:
     df_print: paged
+    toc: true
+    toc_float: true
 ---
 
 # Model structure and setup
-We will consider an illness-death cost-effectiveness model in which patients can transition between three health states: healthy, sick, and death. The cost-effectiveness model will be analyzed using the `R` programming language. The capabilities of `R` are further extended with user-created packages, which bundle together code, data, documentation, and tests. In this analysis, we will use four main packages. The `diagram` package will be used to visualize the illness-death model. `flexsurv` is used to fit the statistical models needed to parameterize the cost-effectiveness model and `hesim` is used to simulate the cost-effectiveness model conditional on the estimated parameters. Finally, `BCEA` is used to analyze the output (i.e., quality-adjusted life-years (QALYs) and costs) produced by `hesim`.
+We will consider an illness-death cost-effectiveness model in which patients can transition between three health states: healthy, sick, and death. The economic model will be analyzed using the `R` programming language. In this analysis, we will use five `R` packages. The [diagram](https://cran.r-project.org/web/packages/diagram/index.html) package will be used to visualize the illness-death model. [flexsurv](https://cran.r-project.org/web/packages/flexsurv/index.html) and mstate are used to estimate a multi-state statistical model needed to parameterize the economic model. [hesim](https://innovationvalueinitiative.github.io/hesim/) is then used to simulate the economic model conditional on the estimated parameters. Finally, [BCEA](https://sites.google.com/a/statistica.it/gianluca/bcea) is used to analyze the output (i.e., quality-adjusted life-years (QALYs) and costs) produced by `hesim`.
 
 We begin by loading the required packages.
 
-```{r, message = FALSE, warning = FALSE}
+```{r packages, message = FALSE, warning = FALSE}
 library("diagram")
-library("BCEA")
-library("hesim")
 library("flexsurv")
+library("mstate")
+library("hesim")
+library("BCEA")
+library("ggplot2")
+library("scales")
 ```
 
 We can visualize the illness-death model by creating a transition matrix that describes the 3 possible health states and 4 possible transitions. The matrix is a square-matrix where the (i,j) element is a positive integer if a transition from i to j is possible and `NA` otherwise. 
 
-```{r}
+```{r visualize}
 tmat <- rbind(c(NA, 1, 2),
               c(3, NA, 4),
               c(NA, NA, NA))
@@ -30,49 +35,231 @@ diagram::plotmat(tmat, name = c("Healthy", "Sick", "Death"))
 To use the illness-death model to simulate QALYs and costs we assign "state values"" to each of the three health states. The full cost-effectiveness analysis is then conducted in three steps:
 
 * **Parameter estimation**: Multi-state statistical models are used to characterize transitions between health states. In addition, quality-of-life and cost values are estimated for each health state. 
-* **Model simulation**: Once the model is parameterized, time spent in each health state is simulated, which is, in turn, used to compute QALYs and costs. 
-* **(Bayesian) cost-effectiveness analysis**: Given the simulated output of the model, we summarize the probabilistic sensitivity analysis (PSA) and compute standard quantities of interest such as cost per QALY.
+* **Simulation**: Once the model is parameterized, time spent in each health state is simulated, which is, in turn, used to compute QALYs and costs. 
+* **Decision analysis**: Given the simulated output of the model, we summarize the probabilistic sensitivity analysis (PSA) and compute quantities of interest such as cost per QALY.
 
-# Parameter estimation 
+# Parameter estimation
+Three sets of parameters must be estimated to parameterize the cost-effectiveness model: the parameters of the multi-state model of the health state transitions, the utility values, and the cost values. Since we would like to estimate the impact of parameter uncertainty on the cost-effectiveness results with a probabilistic sensitivity analysis (PSA), we take a Bayesian (or quasi-Bayesian) approach in that we estimate the joint posterior distribution of all model parameters. We will use 1,000 random samples of the parameters from their posterior distribution.
 
-# Model simulation
+```{r n_samples}
+n_samples <- 1000
+```
 
-# Bayesian cost-effectiveness analysis
+## Multi-state model
+We begin our parameter estimation by estimating a "clock-reset" multi-state statistical model, which implies that the hazard functions reset each time a patient enters a new health state. To do so, we first inspect the observed transitions in the available data. The data shows that there are 532 and 544 transitions in which patients begin in state 1 (healthy) and state 2 (sick), respectively. From the healthy state, 274 patients transition to the healthy state, 104 die, and 154 remain in the healthy state at the end of follow-up; likewise, in the sick state, 314 patients recover and move back to the healthy state while 188 die. In total, 292 patients die.
 
+```{r events}
+mstate_data <- hesim::ctstm3_exdata$transitions
+class(mstate_data) <- c("msdata", "data.frame")
+attr(mstate_data, "trans") <- tmat
+mstate::events(mstate_data)
+```
 
-<!-- # Parameter estimation -->
-<!-- ```{r} -->
+Now that the data has been examined we can fit parametric multi-state models to the data. Although parametric models are needed to extrapolate outcomes beyond available follow-up time with the economic model, it is a good idea to fit non-parametric models as well so that we can assess the impact of our modeling assumptions. `flexsurv` allows for a number of parametric survival models including exponential, Weibull, Gompertz, gamma, lognormal, log-logistic, generalized gamma, generalized F, and survival splines. For brevity we will use the flexible generalized gamma distribution.
 
-<!-- plotmat(tmat, name = c("Healthy", "Sick", "Death")) -->
+```{r fits}
+# Non-parametric models
+cox_fits <- survival::coxph(Surv(years, status) ~ strata(trans) + strategy_id, data = mstate_data) 
 
+# Parametric models
+n_trans <- max(tmat, na.rm = TRUE) # Number of transitions
+ggamma_fits <- vector(length = n_trans, mode = "list") 
+for (i in 1:length(ggamma_fits)){
+  ggamma_fits[[i]] <- flexsurv::flexsurvreg(Surv(years, status) ~ strategy_id, 
+                                            data = mstate_data, 
+                                            subset = (trans == i) , 
+                                            dist = "gengamma") 
+}
+```
 
+The non-parametric and parametric model fits can be compared using the cumulative hazard functions. Specifically, we plot the cumulative hazard functions for each of the four possible transitions: healthy to sick, healthy to death, sick to healthy, and sick to death.
 
-<!-- fits <- vector(length = 3, mode = "list") -->
-<!-- dat <- data.frame(bosms3) -->
-<!-- for (i in 1:length(fits)){ -->
-<!--   fits[[i]] <- flexsurvreg(Surv(years, status) ~ 1, data = dat[dat$trans == i, ], -->
-<!--                            dist = "weibull") -->
-<!-- } -->
-<!-- fits <- flexsurvreg_list(fits) -->
-<!-- ``` -->
+```{r cumhaz}
+# Non-parametric 
+cox_cumhaz <- mstate::msfit(cox_fits, 
+                            newdata = data.frame(strategy_id = 1, strata = 1:n_trans),
+                            trans = tmat, variance = FALSE)
+max_time <- max(cox_cumhaz$Haz$time) # Maximum follow-up time
 
-<!-- # Simulation -->
-<!-- ```{r} -->
-<!-- df_strategies <- data.frame(strategy_id = c(1, 2, 3)) -->
-<!-- df_patients <- data.frame(patient_id = seq(1, 1000)) -->
-<!-- hesim_dat <- hesim_data(strategies = df_strategies, -->
-<!--                         patients = df_patients) -->
-<!-- fits_data <- expand_hesim_data(hesim_dat) -->
-<!-- tmat <- rbind(c(NA, 1, 2), -->
-<!--               c(NA, NA, 3), -->
-<!--               c(NA, NA, NA)) -->
-<!-- transmod <- create_CtstmTrans(fits, data = fits_data, trans_mat = tmat, -->
-<!--                               n = 1000) -->
-<!-- ictstm <- IndivCtstm$new(trans_model = transmod) -->
+# Parametric
+ggamma_cumhaz <- flexsurv::msfit.flexsurvreg(ggamma_fits, 
+                                             newdata = data.frame(strategy_id = 1),
+                                             t = seq(1, max_time, by = .01),
+                                             trans = tmat, variance = FALSE)
 
-<!-- ptm <- proc.time() -->
-<!-- disprog <- ictstm$sim_disease()$disease_prog_ -->
-<!-- proc.time() - ptm -->
-<!-- ``` -->
+# Plot to compare
+cumhaz_data <- rbind(data.frame(cox_cumhaz$Haz,
+                                model = "Cox"),
+                     data.frame(ggamma_cumhaz$Haz,
+                                model = "Generalized gamma"))
+cumhaz_data$trans <- factor(cumhaz_data$trans,
+                            levels = seq(1, 4),
+                            labels = c("Healthy -> Sick",
+                                       "Healthy -> Death",
+                                       "Sick -> Healthy",
+                                       "Sick -> Death"))
+ggplot2::ggplot(cumhaz_data, aes(x = time, y = Haz, col = model, linetype = model)) +
+  geom_line() + facet_wrap(~trans) + 
+  scale_color_discrete(name = "") +
+  scale_linetype_discrete(guide = FALSE) +
+  xlab("Years") + ylab("Cumulative hazard") + theme_minimal()
+```
 
-<!-- # Analysis -->
+## Costs and utility
+Although cost and utility values could in principle be estimated directly from the data, we consider the common case in which they are based on estimates from the literature. For instance, suppose that there are two cost categories: medical and drug. Drug costs are \$10,000 per for treatment strategy 1 and \$12,500 per year for treatment strategy 2. Suppose we know drug costs with certainty so they are constant across samples in the PSA.
+
+```{r drug-costs}
+# Drug costs 
+drugcost1 <- 10000
+drugcost2 <- 12500
+```
+
+Unlike drug costs, medical costs vary across health states but not across treatment strategies. Since medical costs are typically right skewed, they often follow a gamma distribution. Here, we assume that medical costs are gamma distributed and that we have data on their mean and standard error. We use methods of moments to recover the underlying parameters of the gamma distribution, which in turn, used to sample mean medical costs from the gamma distribution.
+
+```{r medical_costs}
+medcosts_mean <- c(800, 1500)
+medcosts_se <- c(100, 150)
+gamma_params <- mom_gamma(mean = medcosts_mean, sd = medcosts_se)
+medcost_means_posterior <- matrix(rgamma(n_samples * 2, shape = gamma_params$shape,
+                               scale = gamma_params$scale),
+                               nrow = n_samples, byrow = TRUE)
+```
+
+We take a similar approach for utility. Specifically, we assume that utility (which typically ranges from 0 to 1) follows a beta distribution. We use the method of moments to recover the parameters of the beta distribution from the mean and standard error, and sample utility values from the beta distribution.
+
+```{r utility}
+utility_mean <- c(0.90, 0.55)
+utility_se <- c(.1, .2)
+beta_params <- mom_beta(mean = utility_mean, sd = utility_se)
+utility_means_posterior <- matrix(rbeta(n_samples * 2, shape1 = beta_params$shape1,
+                                  shape2 = beta_params$shape2),
+                                  nrow = n_samples, byrow = TRUE)
+utility_means <- stateval_means(values = utility_means_posterior,
+                                strategy_id = c(1, 2),
+                                patient_id = seq(1, 1000))
+```
+
+# Simulation
+Given parameter estimates for the disease model, costs, and utility, the cost-effectiveness model can be simulated. We can do this using the `hesim` package. We must first set up our model by specifying the treatment strategies, the patients to model, and the number of health states. Since we fit a clock-reset multi-state model, we can only estimate health state occupancy using an individual patient simulation. Since we are ultimately interested in simulated mean costs and QALYs (across patients), we simualte the model for 1,000 patients to ensure that our simulated means are stable.
+
+```{r sim_setup}
+strategies <- data.frame(strategy_id = c(1, 2))
+patients <- data.frame(patient_id = seq(1, 1000))
+states <- data.frame(state_id = seq(1, 3),
+                     state_name = c("Healthy", "Sick", "Death"))
+hesim_dat <- hesim_data(strategies = strategies,
+                        patients = patients,
+                        states = states)
+
+```
+
+We can then setup the model for disease progression which simulates health state transitions by treatment strategy and patient. 
+
+```{r transmod}
+trans_data <- expand_hesim_data(hesim_dat, 
+                                by = c("strategies", "patients"))
+ggamma_fits <- hesim::flexsurvreg_list(ggamma_fits)
+transmod <- hesim::create_IndivCtstmTrans(ggamma_fits, data = trans_data, trans_mat = tmat,
+                                          n = n_samples)
+```
+
+We can also setup models for costs and utility used our estimated mean values.
+
+```{r medcost_mod}
+# Medical cost model
+medcost_means <- stateval_means(values = medcost_means_posterior,
+                               strategy_id = c(1, 2),
+                               patient_id = seq(1, 1000))
+medcostmod <- create_StateVals(medcost_means)
+
+# Drug cost model
+drugcost_array <- array(NA, dim = c(n_samples, 2, 2))
+drugcost_array[, , 1] <- drugcost1
+drugcost_array[, , 2] <- drugcost2
+drugcost_means <- stateval_means(values = drugcost_array,
+                                strategy_id = c(1, 2),
+                                patient_id = seq(1, 1000))
+drugcostmod <- create_StateVals(drugcost_means)
+
+# Utility model
+utility_means <- stateval_means(values = utility_means_posterior,
+                                strategy_id = c(1, 2),
+                                patient_id = seq(1, 1000))
+utilitymod <- create_StateVals(utility_means)
+```
+
+```{r IndivCtstm}
+ictstm <- IndivCtstm$new(trans_model = transmod,
+                         utility_model = utilitymod,
+                         cost_models = list(drugs = drugcostmod,
+                                            medical = medcostmod)) 
+
+```
+
+```{r sim_disease}
+ictstm$sim_disease()
+ictstm$sim_stateprobs(t = seq(0, 20))
+
+# Plotting
+stateprob_means <- ictstm$stateprobs_[, .(prob = mean(prob)), 
+                                      by = c("strategy_id", "state_id", "t")]
+ggplot2::ggplot(stateprob_means, 
+                aes(x = t, y = prob, col = factor(strategy_id))) +
+  geom_line() + facet_wrap(~factor(state_id)) + 
+  scale_color_discrete(name = "") +
+  xlab("Years") + ylab("Probability") + theme_minimal()
+```
+
+```{r sim_costs and sim_qalys}
+ictstm$sim_qalys(dr = .03)
+ictstm$sim_costs(dr = .03)
+ce_output <- ictstm$summarize()
+head(ce_output$costs)
+head(ce_output$qalys)
+```
+
+```{r bcea setup}
+# QALYs
+qalys_mat <- matrix(ce_output$qalys$qalys, nrow = n_samples,
+                    byrow = TRUE)
+costs_mat <- matrix(ce_output$costs[category == "total", costs], nrow = n_samples,
+                    byrow = TRUE)
+colnames(qalys_mat) <- colnames(costs_mat) <- c("Strategy 1", "Strategy 2")
+```
+
+# Decision analysis
+Summaries of the clinical benefit (e.g., QALYs) and costs of the two treatment strategies simulated using the cost-effectiveness model are stored in the matrices `qalys_mat` and `costs_mat`. Each row is a simulated parameter set from the PSA and each column is a unique treatment strategy. 
+
+```{r bcea_matrices}
+head(qalys_mat)
+head(costs_mat)
+```
+
+Given this output, we can use the function `bcea` to summarize the results of the cost-effectiveness model and compute suitable measures of "cost-effectiveness". 
+
+```{r run_bcea}
+bcea_out <- BCEA::bcea(e = qalys_mat, c = costs_mat, ref = 2, Kmax = 100000)
+```
+
+It is then straightforward to produce commonly used graphs. For instance, we can plot the cost-effectiveness plane, which compares intervention 2 with intervention 1. 
+
+```{r ceplane}
+ceplane.plot(bcea_out, graph = "ggplot2", wtp = 50000) +
+  theme_minimal() 
+```
+
+We can also plot the cost-effectiveness acceptability curve which measures the probability that intervention 2 is cost-effective relative to intervention 1 at various willingness to pay thresholds.
+
+```{r ceac}
+ceac.plot(bcea_out, graph = "ggplot2") + theme_minimal() +
+  scale_x_continuous(labels = comma)
+```
+
+Finally, we can plot the expected value of perfect information (EVPI), which is a measure of the maximum amount that a decision maker would be willing to pay to reduce all uncertainty in all parameters. 
+
+```{r evi}
+evi.plot(bcea_out, graph = "ggplot2") + theme_minimal() +
+   scale_x_continuous(labels = comma)
+```
+
+It is also possible to compute the value of reducing uncertainty in a subset of parameters (i.e., the expected value of partial perfect information (EVPPI)) with the function `evppi`. Furthermore, the R package `EVSI` can be used to compute the expected value of sample information (EVSI).
