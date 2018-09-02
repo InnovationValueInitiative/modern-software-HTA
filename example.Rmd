@@ -3,12 +3,14 @@ title: "Bayesian cost-effectiveness analysis with an individual-level semi-Marko
 output:
   html_document:
     df_print: paged
-    toc: true
-    toc_float: true
+    toc: yes
+    toc_float: yes
+  word_document:
+    toc: yes
 ---
 
 # Model structure and setup
-We will consider an illness-death cost-effectiveness model in which patients can transition between three health states: healthy, sick, and death. The economic model will be analyzed using the `R` programming language. In this analysis, we will use five `R` packages. The [diagram](https://cran.r-project.org/web/packages/diagram/index.html) package will be used to visualize the illness-death model. [flexsurv](https://cran.r-project.org/web/packages/flexsurv/index.html) and mstate are used to estimate a multi-state statistical model needed to parameterize the economic model. [hesim](https://innovationvalueinitiative.github.io/hesim/) is then used to simulate the economic model conditional on the estimated parameters. Finally, [BCEA](https://sites.google.com/a/statistica.it/gianluca/bcea) is used to analyze the output (i.e., quality-adjusted life-years (QALYs) and costs) produced by `hesim`.
+We will consider an illness-death economic model in which patients can transition between three health states: healthy, sick, and death. The economic model will be analyzed using the `R` programming language. In this analysis, we will use five `R` packages. The [diagram](https://cran.r-project.org/web/packages/diagram/index.html) package will be used to visualize the illness-death model. [flexsurv](https://cran.r-project.org/web/packages/flexsurv/index.html) and mstate are used to estimate a multi-state statistical model needed to parameterize the economic model. [hesim](https://innovationvalueinitiative.github.io/hesim/) is then used to simulate the economic model conditional on the estimated parameters. Finally, [BCEA](https://sites.google.com/a/statistica.it/gianluca/bcea) is used to analyze the output (i.e., quality-adjusted life-years (QALYs) and costs) produced by `hesim`.
 
 We begin by loading the required packages.
 
@@ -39,7 +41,7 @@ To use the illness-death model to simulate QALYs and costs we assign "state valu
 * **Decision analysis**: Given the simulated output of the model, we summarize the probabilistic sensitivity analysis (PSA) and compute quantities of interest such as cost per QALY.
 
 # Parameter estimation
-Three sets of parameters must be estimated to parameterize the cost-effectiveness model: the parameters of the multi-state model of the health state transitions, the utility values, and the cost values. Since we would like to estimate the impact of parameter uncertainty on the cost-effectiveness results with a probabilistic sensitivity analysis (PSA), we take a Bayesian (or quasi-Bayesian) approach in that we estimate the joint posterior distribution of all model parameters. We will use 1,000 random samples of the parameters from their posterior distribution.
+Three sets of parameters must be estimated to parameterize the economic model: the parameters of the multi-state model of the health state transitions, the utility values, and the cost values. Since we would like to estimate the impact of parameter uncertainty on the cost-effectiveness results with a probabilistic sensitivity analysis (PSA), we take a Bayesian (or quasi-Bayesian) approach in that we estimate the joint posterior distribution of all model parameters. We will use 1,000 random samples of the parameters from their posterior distribution.
 
 ```{r n_samples}
 n_samples <- 1000
@@ -140,7 +142,7 @@ utility_means <- stateval_means(values = utility_means_posterior,
 ```
 
 # Simulation
-Given parameter estimates for the disease model, costs, and utility, the cost-effectiveness model can be simulated. We can do this using the `hesim` package. We must first set up our model by specifying the treatment strategies, the patients to model, and the number of health states. Since we fit a clock-reset multi-state model, we can only estimate health state occupancy using an individual patient simulation. Since we are ultimately interested in simulated mean costs and QALYs (across patients), we simualte the model for 1,000 patients to ensure that our simulated means are stable.
+Given parameter estimates for the health state transitions, costs, and utility, the economic model can be simulated. We can do this using the `hesim` package. We must first set up our model by specifying the treatment strategies, the patients to model, and the number of health states. Since we fit a clock-reset multi-state model, we can only estimate health state occupancy using an individual patient simulation. Since we are ultimately interested in simulated mean costs and QALYs (across patients), we simulate the model for 1,000 patients to ensure that our simulated means are stable.
 
 ```{r sim_setup}
 strategies <- data.frame(strategy_id = c(1, 2))
@@ -153,7 +155,7 @@ hesim_dat <- hesim_data(strategies = strategies,
 
 ```
 
-We can then setup the model for disease progression which simulates health state transitions by treatment strategy and patient. 
+We can then setup the model for disease progression which simulates the multi-state trajectory. The object `trans_data` stores the input data used to simulate health state transitions across treatment strategies and patients with the fitted generalized gamma multi-state model. Parameters from the posterior distribution of the gamma distribution are simulated in a quasi-Bayesian manner by drawing from multi-variate normal distributions.
 
 ```{r transmod}
 trans_data <- expand_hesim_data(hesim_dat, 
@@ -163,9 +165,9 @@ transmod <- hesim::create_IndivCtstmTrans(ggamma_fits, data = trans_data, trans_
                                           n = n_samples)
 ```
 
-We can also setup models for costs and utility used our estimated mean values.
+We can also setup models for costs and utility using simulated posterior distributions for the mean values. In each case, we specify that costs and utility will be predicted for 2 treatment strategies and 1,000 patients. Medical costs and utilities vary across health states (but not patients or treatment strategies) while drug costs vary across treatment strategies (but not patient or health states).
 
-```{r medcost_mod}
+```{r cost and utility models}
 # Medical cost model
 medcost_means <- stateval_means(values = medcost_means_posterior,
                                strategy_id = c(1, 2),
@@ -188,6 +190,8 @@ utility_means <- stateval_means(values = utility_means_posterior,
 utilitymod <- create_StateVals(utility_means)
 ```
 
+Once (statistical) models for the health state transitions, costs, and utility have been specified, the economic model can be simulated. We used an individual-level continuous time state transition model (CTSTM) to simulate disease progression, often referred to as a semi-Markov multi-state model. 
+
 ```{r IndivCtstm}
 ictstm <- IndivCtstm$new(trans_model = transmod,
                          utility_model = utilitymod,
@@ -195,6 +199,8 @@ ictstm <- IndivCtstm$new(trans_model = transmod,
                                             medical = medcostmod)) 
 
 ```
+
+We first simulate disease progression by simulating the multi-state trajectory across patients by treatment strategy. Since the simulation is written in `C++`, we are able to simulate 1,000 random samples of the parameters for the PSA, 1,000 patients, and 2 treatment strategies quite quickly. We summarize the results of the simulation by computing the simulated probabilities of state occupancy over time.
 
 ```{r sim_disease}
 ictstm$sim_disease()
@@ -210,6 +216,8 @@ ggplot2::ggplot(stateprob_means,
   xlab("Years") + ylab("Probability") + theme_minimal()
 ```
 
+Given simulated disease progression, we can compute (discounted) costs and QALYs assuming a 3 percent discount rate. We "summarize" the results so that we have a posterior distribution of costs and QALYs stratified by treatment strategy. 
+
 ```{r sim_costs and sim_qalys}
 ictstm$sim_qalys(dr = .03)
 ictstm$sim_costs(dr = .03)
@@ -218,8 +226,10 @@ head(ce_output$costs)
 head(ce_output$qalys)
 ```
 
+# Decision analysis
+To analyze the results and perform a decision analysis (i.e., Bayesian cost-effectiveness analysis) with the `BCEA` package, we store our summaries of clinical benefit (e.g., QALYs) and costs in the matrices `qalys_mat` and `costs_mat`.
+
 ```{r bcea setup}
-# QALYs
 qalys_mat <- matrix(ce_output$qalys$qalys, nrow = n_samples,
                     byrow = TRUE)
 costs_mat <- matrix(ce_output$costs[category == "total", costs], nrow = n_samples,
@@ -227,15 +237,14 @@ costs_mat <- matrix(ce_output$costs[category == "total", costs], nrow = n_sample
 colnames(qalys_mat) <- colnames(costs_mat) <- c("Strategy 1", "Strategy 2")
 ```
 
-# Decision analysis
-Summaries of the clinical benefit (e.g., QALYs) and costs of the two treatment strategies simulated using the cost-effectiveness model are stored in the matrices `qalys_mat` and `costs_mat`. Each row is a simulated parameter set from the PSA and each column is a unique treatment strategy. 
+Each row is a simulated parameter set from the PSA and each column is a unique treatment strategy. 
 
 ```{r bcea_matrices}
 head(qalys_mat)
 head(costs_mat)
 ```
 
-Given this output, we can use the function `bcea` to summarize the results of the cost-effectiveness model and compute suitable measures of "cost-effectiveness". 
+Given this output, we can use the function `bcea` to summarize the results of the economic model and compute suitable measures of "cost-effectiveness". 
 
 ```{r run_bcea}
 bcea_out <- BCEA::bcea(e = qalys_mat, c = costs_mat, ref = 2, Kmax = 100000)
@@ -255,7 +264,7 @@ ceac.plot(bcea_out, graph = "ggplot2") + theme_minimal() +
   scale_x_continuous(labels = comma)
 ```
 
-Finally, we can plot the expected value of perfect information (EVPI), which is a measure of the maximum amount that a decision maker would be willing to pay to reduce all uncertainty in all parameters. 
+Finally, we can plot the expected value of perfect information (EVPI), which is a measure of the maximum amount that a decision maker would be willing to pay to reduce all uncertainty in all parameters. The dashed lines represent the break even point, or, the point where an optimal decision changes from intervention 1 to intervention 2.
 
 ```{r evi}
 evi.plot(bcea_out, graph = "ggplot2") + theme_minimal() +
