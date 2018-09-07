@@ -158,8 +158,7 @@ hesim_dat <- hesim_data(strategies = strategies,
 We can then setup the model for disease progression which simulates the multi-state trajectory. The object `trans_data` stores the input data used to simulate health state transitions across treatment strategies and patients with the fitted generalized gamma multi-state model. Parameters from the posterior distribution of the gamma distribution are simulated in a quasi-Bayesian manner by drawing from multi-variate normal distributions.
 
 ```{r transmod}
-trans_data <- expand_hesim_data(hesim_dat, 
-                                by = c("strategies", "patients"))
+trans_data <- expand(hesim_dat, by = c("strategies", "patients"))
 ggamma_fits <- hesim::flexsurvreg_list(ggamma_fits)
 transmod <- hesim::create_IndivCtstmTrans(ggamma_fits, data = trans_data, trans_mat = tmat,
                                           n = n_samples)
