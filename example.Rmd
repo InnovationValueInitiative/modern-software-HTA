@@ -67,7 +67,7 @@ cox_fits <- survival::coxph(Surv(years, status) ~ strata(trans) + strategy_id, d
 n_trans <- max(tmat, na.rm = TRUE) # Number of transitions
 ggamma_fits <- vector(length = n_trans, mode = "list") 
 for (i in 1:length(ggamma_fits)){
-  ggamma_fits[[i]] <- flexsurv::flexsurvreg(Surv(years, status) ~ strategy_id, 
+  ggamma_fits[[i]] <- flexsurv::flexsurvreg(Surv(years, status) ~ factor(strategy_id), 
                                             data = mstate_data, 
                                             subset = (trans == i) , 
                                             dist = "gengamma") 
