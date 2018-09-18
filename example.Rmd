@@ -31,7 +31,7 @@ tmat <- rbind(c(NA, 1, 2),
               c(3, NA, 4),
               c(NA, NA, NA))
 print(tmat)
-diagram::plotmat(tmat, name = c("Healthy", "Sick", "Death"))
+diagram::plotmat(t(tmat), name = c("Healthy", "Sick", "Death"))
 ```
 
 To use the illness-death model to simulate QALYs and costs we assign "state values"" to each of the three health states. The full cost-effectiveness analysis is then conducted in three steps:
