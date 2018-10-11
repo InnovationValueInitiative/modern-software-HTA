@@ -34,21 +34,29 @@ print(tmat)
 diagram::plotmat(t(tmat), name = c("Healthy", "Sick", "Death"))
 ```
 
-To use the illness-death model to simulate QALYs and costs we assign "state values"" to each of the three health states. The full cost-effectiveness analysis is then conducted in three steps:
+The full cost-effectiveness analysis is conducted in three steps:
 
 * **Parameter estimation**: Multi-state statistical models are used to characterize transitions between health states. In addition, quality-of-life and cost values are estimated for each health state. 
 * **Simulation**: Once the model is parameterized, time spent in each health state is simulated, which is, in turn, used to compute QALYs and costs. 
 * **Decision analysis**: Given the simulated output of the model, we summarize the probabilistic sensitivity analysis (PSA) and compute quantities of interest such as cost per QALY.
 
-# Parameter estimation
-Three sets of parameters must be estimated to parameterize the economic model: the parameters of the multi-state model of the health state transitions, the utility values, and the cost values. Since we would like to estimate the impact of parameter uncertainty on the cost-effectiveness results with a probabilistic sensitivity analysis (PSA), we take a Bayesian (or quasi-Bayesian) approach in that we estimate the joint posterior distribution of all model parameters. We will use 1,000 random samples of the parameters from their posterior distribution.
+Before proceeding, we define the population, treatment strategies, and modeling approach. We will evaluate 2 competing treatment strategies and model health state transitions with a "clock-reset" multi-state statistical model, which implies that the hazard functions reset each time a patient enters a new health state. Since we are using a clock-reset model, we can only estimate health state occupancy using an individual patient simulation. 1,000 patients are simulated to ensure that our simulated means are stable. The patients, treatment strategies, and health states are specified with `hesim_data()` from the `hesim` package.
 
-```{r n_samples}
-n_samples <- 1000
+```{r hesim_data}
+strategies <- data.frame(strategy_id = c(1, 2))
+patients <- data.frame(patient_id = seq(1, 1000))
+states <- data.frame(state_id = seq(1, 2),
+                     state_name = c("Healthy", "Sick"))
+hesim_dat <- hesim_data(strategies = strategies,
+                        patients = patients,
+                        states = states)
 ```
 
+# Parameter estimation
+Three sets of parameters must be estimated to parameterize the economic model: the parameters of the multi-state model of the health state transitions, the utility values, and the cost values. Since we would like to estimate the impact of parameter uncertainty on the cost-effectiveness results with a probabilistic sensitivity analysis (PSA), we take a Bayesian (or quasi-Bayesian) approach in that we estimate the joint probability distribution of all model parameters. 
+
 ## Multi-state model
-We begin our parameter estimation by estimating a "clock-reset" multi-state statistical model, which implies that the hazard functions reset each time a patient enters a new health state. To do so, we first inspect the observed transitions in the available data. The data shows that there are 532 and 544 transitions in which patients begin in state 1 (healthy) and state 2 (sick), respectively. From the healthy state, 274 patients transition to the healthy state, 104 die, and 154 remain in the healthy state at the end of follow-up; likewise, in the sick state, 314 patients recover and move back to the healthy state while 188 die. In total, 292 patients die.
+Before fitting the multi-state model, we inspect the observed transitions in the available data. The data shows that there are 532 and 544 transitions in which patients begin in state 1 (healthy) and state 2 (sick), respectively. From the healthy state, 274 patients transition to the healthy state, 104 die, and 154 remain in the healthy state at the end of follow-up; likewise, in the sick state, 314 patients recover and move back to the healthy state while 188 die. In total, 292 patients die.
 
 ```{r events}
 mstate_data <- hesim::ctstm3_exdata$transitions
@@ -61,7 +69,8 @@ Now that the data has been examined we can fit parametric multi-state models to 
 
 ```{r fits}
 # Non-parametric models
-cox_fits <- survival::coxph(Surv(years, status) ~ strata(trans) + strategy_id, data = mstate_data) 
+cox_fits <- survival::coxph(Surv(years, status) ~ strata(trans) + strategy_id, 
+                            data = mstate_data) 
 
 # Parametric models
 n_trans <- max(tmat, na.rm = TRUE) # Number of transitions
@@ -111,91 +120,68 @@ ggplot2::ggplot(cumhaz_data, aes(x = time, y = Haz, col = model, linetype = mode
 Although cost and utility values could in principle be estimated directly from the data, we consider the common case in which they are based on estimates from the literature. For instance, suppose that there are two cost categories: medical and drug. Drug costs are \$10,000 per for treatment strategy 1 and \$12,500 per year for treatment strategy 2. Suppose we know drug costs with certainty so they are constant across samples in the PSA.
 
 ```{r drug-costs}
-# Drug costs 
-drugcost1 <- 10000
-drugcost2 <- 12500
+drugcost_tbl <- hesim::stateval_tbl(tbl = data.frame(strategy_id = strategies$strategy_id,
+                                                     est = c(10000, 12500)),
+                                    dist = "fixed",
+                                    hesim_data = hesim_dat)
 ```
 
 Unlike drug costs, medical costs vary across health states but not across treatment strategies. Since medical costs are typically right skewed, they often follow a gamma distribution. Here, we assume that medical costs are gamma distributed and that we have data on their mean and standard error. We use methods of moments to recover the underlying parameters of the gamma distribution, which in turn, used to sample mean medical costs from the gamma distribution.
 
 ```{r medical_costs}
-medcosts_mean <- c(800, 1500)
-medcosts_se <- c(100, 150)
-gamma_params <- mom_gamma(mean = medcosts_mean, sd = medcosts_se)
-medcost_means_posterior <- matrix(rgamma(n_samples * 2, shape = gamma_params$shape,
-                               scale = gamma_params$scale),
-                               nrow = n_samples, byrow = TRUE)
+medcost_tbl <- hesim::stateval_tbl(data.frame(state_id = states$state_id,
+                                              mean = c(800, 1500),
+                                              se = c(100, 150)),
+                                   dist = "gamma",
+                                   hesim_data = hesim_dat)
 ```
 
 We take a similar approach for utility. Specifically, we assume that utility (which typically ranges from 0 to 1) follows a beta distribution. We use the method of moments to recover the parameters of the beta distribution from the mean and standard error, and sample utility values from the beta distribution.
 
 ```{r utility}
-utility_mean <- c(0.90, 0.55)
-utility_se <- c(.1, .2)
-beta_params <- mom_beta(mean = utility_mean, sd = utility_se)
-utility_means_posterior <- matrix(rbeta(n_samples * 2, shape1 = beta_params$shape1,
-                                  shape2 = beta_params$shape2),
-                                  nrow = n_samples, byrow = TRUE)
-utility_means <- stateval_means(values = utility_means_posterior,
-                                strategy_id = c(1, 2),
-                                patient_id = seq(1, 1000))
+utility_tbl <- hesim::stateval_tbl(data.frame(state_id = states$state_id,
+                                              mean = c(0.90, 0.55),
+                                              se = c(.1, .2)),
+                                  dist = "beta",
+                                  hesim_data = hesim_dat)
 ```
 
 # Simulation
-Given parameter estimates for the health state transitions, costs, and utility, the economic model can be simulated. We can do this using the `hesim` package. We must first set up our model by specifying the treatment strategies, the patients to model, and the number of health states. Since we fit a clock-reset multi-state model, we can only estimate health state occupancy using an individual patient simulation. Since we are ultimately interested in simulated mean costs and QALYs (across patients), we simulate the model for 1,000 patients to ensure that our simulated means are stable.
+Given parameter estimates for the health state transitions, costs, and utility, the economic model can be simulated. 1,000 Monte Carlo simulations are used for the PSA (i.e., random samples of the parameters from their probability distributions).
 
-```{r sim_setup}
-strategies <- data.frame(strategy_id = c(1, 2))
-patients <- data.frame(patient_id = seq(1, 1000))
-states <- data.frame(state_id = seq(1, 3),
-                     state_name = c("Healthy", "Sick", "Death"))
-hesim_dat <- hesim_data(strategies = strategies,
-                        patients = patients,
-                        states = states)
-
+```{r n_samples}
+n_samples <- 1000
 ```
 
 We can then setup the model for disease progression which simulates the multi-state trajectory. The object `trans_data` stores the input data used to simulate health state transitions across treatment strategies and patients with the fitted generalized gamma multi-state model. Parameters from the posterior distribution of the gamma distribution are simulated in a quasi-Bayesian manner by drawing from multi-variate normal distributions.
 
 ```{r transmod}
-trans_data <- expand(hesim_dat, by = c("strategies", "patients"))
+trans_data <- hesim::expand(hesim_dat, by = c("strategies", "patients"))
 ggamma_fits <- hesim::flexsurvreg_list(ggamma_fits)
 transmod <- hesim::create_IndivCtstmTrans(ggamma_fits, data = trans_data, trans_mat = tmat,
                                           n = n_samples)
 ```
 
-We can also setup models for costs and utility using simulated posterior distributions for the mean values. In each case, we specify that costs and utility will be predicted for 2 treatment strategies and 1,000 patients. Medical costs and utilities vary across health states (but not patients or treatment strategies) while drug costs vary across treatment strategies (but not patient or health states).
+We can also setup models for costs and utility using the parameter estimates and probability distributions specified in the tables above. Each model is a "mean" model that simulates state values (e.g., utility or costs) by treatment strategy, patient, and health state. 
 
 ```{r cost and utility models}
 # Medical cost model
-medcost_means <- stateval_means(values = medcost_means_posterior,
-                               strategy_id = c(1, 2),
-                               patient_id = seq(1, 1000))
-medcostmod <- create_StateVals(medcost_means)
+medcostmod <- hesim::create_StateVals(medcost_tbl, n = n_samples)
 
 # Drug cost model
-drugcost_array <- array(NA, dim = c(n_samples, 2, 2))
-drugcost_array[, , 1] <- drugcost1
-drugcost_array[, , 2] <- drugcost2
-drugcost_means <- stateval_means(values = drugcost_array,
-                                strategy_id = c(1, 2),
-                                patient_id = seq(1, 1000))
-drugcostmod <- create_StateVals(drugcost_means)
+drugcostmod <- hesim::create_StateVals(drugcost_tbl, n = n_samples)
 
 # Utility model
-utility_means <- stateval_means(values = utility_means_posterior,
-                                strategy_id = c(1, 2),
-                                patient_id = seq(1, 1000))
-utilitymod <- create_StateVals(utility_means)
+utilitymod <- hesim::create_StateVals(utility_tbl, n = n_samples)
 ```
 
-Once (statistical) models for the health state transitions, costs, and utility have been specified, the economic model can be simulated. We used an individual-level continuous time state transition model (CTSTM) to simulate disease progression, often referred to as a semi-Markov multi-state model. 
+Once (statistical) models for the health state transitions, costs, and utility have been created, the economic model can be simulated. We use an individual-level continuous time state transition model (CTSTM) to simulate disease progression, often referred to as a semi-Markov multi-state model. 
 
 ```{r IndivCtstm}
-ictstm <- IndivCtstm$new(trans_model = transmod,
-                         utility_model = utilitymod,
-                         cost_models = list(drugs = drugcostmod,
-                                            medical = medcostmod)) 
+ictstm <- hesim::IndivCtstm$new(trans_model = transmod,
+                                utility_model = utilitymod,
+                                cost_models = list(drugs = drugcostmod,
+                                                   medical = medcostmod)) 
 
 ```
 
